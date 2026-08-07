@@ -1,127 +1,96 @@
-# SmartLunch Secure API
+# SmartLunch API
 
-## 🔐 Configuración de Credenciales
+Backend de SmartLunch: sistema de gestión de comedores empresariales. Maneja
+autenticación, usuarios, platos, menú del día, turnos, comedores, un motor de
+reglas de bonificación (descuentos configurables sin tocar código) y reportes
+de facturación/gestión. Incluye integraciones con SmartTime (datos laborales)
+y Biostar (control de acceso).
 
-**IMPORTANTE:** Este proyecto utiliza un archivo externo para almacenar credenciales críticas de forma segura.
+## Stack
 
-### Configuración Inicial
+- .NET Framework 4.8.1 · ASP.NET Web API 2
+- Entity Framework 6 (Database First)
+- SQL Server (probado con SQL Server Express)
+- Autenticación JWT (HMAC-SHA256) + refresh tokens
+- Swagger para explorar la API (`/swagger`)
 
-1. **Copia el archivo de ejemplo:**
-   ```bash
-   cp appSettings.secrets.config.example appSettings.secrets.config
-   ```
+## Puesta en marcha
 
-2. **Edita `appSettings.secrets.config`** y reemplaza los valores placeholder con las credenciales reales:
-   - `SmartTimePassword`: Contraseña de SmartTime
-   - `BiostarPassword`: Contraseña de Biostar
-   - `JwtSecret`: Secret para firmar tokens JWT (mínimo 32 caracteres)
+### 1. Credenciales
 
-3. **Verifica que `appSettings.secrets.config` esté en `.gitignore`** (ya está configurado)
+El proyecto separa los secretos reales de lo que se versiona en Git.
 
-### ⚠️ Advertencias de Seguridad
-
-- ❌ **NUNCA** subas `appSettings.secrets.config` al repositorio Git
-- ✅ El archivo `appSettings.secrets.config.example` SÍ debe estar en Git como referencia
-- 🔒 Mantén el archivo de secretos con permisos restringidos en el servidor
-- 📝 Cada ambiente (desarrollo, staging, producción) debe tener su propio archivo de secretos
-
-### Estructura de Archivos
-
-```
-📁 SmartLunchSecureApi/
-  📄 Web.config                              (configuración principal)
-  📄 appSettings.secrets.config              (NO en Git - credenciales reales)
-  📄 appSettings.secrets.config.example      (SÍ en Git - template)
+```bash
+cp appSettings.secrets.config.example appSettings.secrets.config
 ```
 
----
+Editá `appSettings.secrets.config` y completá:
 
-## Getting started
+- `SmartTimePassword` — contraseña de la integración SmartTime
+- `BiostarPassword` — contraseña de la integración Biostar
+- `JwtSecret` — clave para firmar los tokens JWT (larga y aleatoria)
+- `ScriptRunnerKey` — clave del panel de scripts pendientes (`/api/DbScripts`)
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+`appSettings.secrets.config` está en `.gitignore` — **nunca se sube al repo**.
+Solo el `.example` (con placeholders) se versiona, como referencia.
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+### 2. Base de datos
 
-## Add your files
+No hace falta correr un script a mano. Al abrir la app por primera vez contra
+una base de datos que no existe, se muestra una pantalla de **configuración
+inicial** (`Default.html` / `/api/Setup`) que:
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+1. Crea la base de datos y las tablas (`Scripts/CrearBaseDatosYTablas.sql`).
+2. Siembra los catálogos base (planta, plan nutricional, jerarquías, etc.).
+3. Pide la contraseña que vas a usar para el usuario `admin` (y para `smarTime`
+   si la integración está habilitada) y la deja configurada.
+
+La cadena de conexión se define en `web.config` (`connectionStrings` →
+`DataContext`). Por defecto apunta a `.\SQLEXPRESS`.
+
+### 3. Correr la API
+
+Abrir `smartlunch-api.sln` en Visual Studio y ejecutar con IIS Express
+(F5), o publicar en un IIS real para producción. La API queda disponible en
+la URL que indique el proyecto (por defecto `http://localhost:8000`), con
+Swagger en `/swagger`.
+
+### 4. Scripts de migración
+
+Los cambios de esquema posteriores a la instalación inicial viven en
+`Scripts/nuevos_scripts/`. Se administran desde el panel `/scripts-pendientes`
+del front (o `/api/DbScripts` directamente), que muestra qué scripts faltan
+ejecutar contra la base actual y en qué orden. Todo script nuevo también debe
+sumarse a `Scripts/CrearBaseDatosYTablas.sql` para que las instalaciones desde
+cero ya lo incluyan.
+
+## Estructura
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/cima-smartluch/api.git
-git branch -M main
-git push -uf origin main
+Controllers/    Endpoints de la Web API (uno por recurso)
+Service/        Lógica de negocio (ServicioX por cada Controller)
+Dtos/           Contratos de entrada/salida de la API
+Models/         Entidades EF6 (Database First) + DataContext
+Filters/        Autenticación por rol, rate limiting, manejo de errores
+App_Start/      Configuración de arranque (Web API, Swagger, seed de datos)
+Scripts/        Script de creación de base + migraciones incrementales
 ```
 
-## Integrate with your tools
+## Seguridad
 
-- [ ] [Set up project integrations](https://gitlab.com/cima-smartluch/api/-/settings/integrations)
+- Contraseñas con PBKDF2 (salt por usuario, iteraciones versionadas por fila
+  para poder subir el costo de hashing sin invalidar logins existentes).
+- Rate limiting por IP y por usuario en los endpoints de login.
+- CORS restringido por whitelist (`CorsAllowedOrigins` en `web.config`).
+- Roles por jerarquía (Admin/Gerencia/Cocina/Comensal) vía JWT, con
+  autorización explícita en cada endpoint sensible.
 
-## Collaborate with your team
+## Advertencias
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+- ❌ Nunca subir `appSettings.secrets.config` ni `connectionStrings.secrets.config`
+  al repositorio (ya están en `.gitignore`).
+- 📁 La carpeta `documentos/` (notas internas) está excluida del repo a
+  propósito — puede contener datos sensibles de trabajo, no es documentación
+  pública del proyecto.
+- 🔒 Cada ambiente (desarrollo, staging, producción) debe tener su propio
+  archivo de secretos.
