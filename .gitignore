@@ -382,6 +382,3 @@ App_Data/*credentials*
 # Fotos de platos subidas en runtime (contenido, no código) y logs de la app
 uploads/
 App_Data/Logs/
-
-# Notas de trabajo con contraseñas/secretos reales pegados como ejemplo (no sanitizadas)
-documentos/
