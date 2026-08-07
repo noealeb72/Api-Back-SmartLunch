@@ -106,6 +106,23 @@ namespace smartlunch_api.Controllers
         {
             try
             {
+                // ===== 0) Autenticación por clave compartida =====
+                // El tótem físico llama a este endpoint y no puede loguearse con usuario/contraseña
+                // como el resto de la API, así que se protege con una clave fija en un header en vez
+                // de JWT. Sin esto, cualquiera que llegara a la URL podía disparar el registro de
+                // fichadas sin autenticarse.
+                var claveConfigurada = ConfigurationManager.AppSettings["BiostarSyncKey"];
+                var claveRecibida = Request.Headers.Contains("X-Biostar-Key")
+                    ? Request.Headers.GetValues("X-Biostar-Key").FirstOrDefault()
+                    : null;
+
+                if (string.IsNullOrEmpty(claveConfigurada) ||
+                    !PasswordUtils.FixedTimeEquals(claveConfigurada, claveRecibida ?? string.Empty))
+                {
+                    _logger?.LogWarning("GetEvents: Intento de acceso sin clave X-Biostar-Key válida");
+                    return Unauthorized();
+                }
+
                 // ===== 1) Rango de fechas (UTC) =====
                 var desde = DateTime.UtcNow;                    
                 var hasta = desde.AddDays(1);
