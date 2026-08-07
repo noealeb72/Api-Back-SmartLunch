@@ -250,6 +250,14 @@ namespace smartlunch_api.Controllers
                 if (string.IsNullOrWhiteSpace(nombreArchivo))
                     return new HttpResponseMessage(HttpStatusCode.BadRequest);
 
+                // Quedarse solo con el nombre de archivo, descartando cualquier segmento de ruta
+                // (../, \, rutas absolutas). Un StartsWith sobre la ruta combinada no alcanza acá:
+                // Path.Combine no resuelve "..", así que ese chequeo se puede evadir con
+                // "../../web.config" y terminar leyendo archivos fuera de la carpeta de imágenes.
+                var nombreArchivoSeguro = Path.GetFileName(nombreArchivo);
+                if (string.IsNullOrWhiteSpace(nombreArchivoSeguro))
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest);
+
                 // Obtener ruta de la carpeta de imágenes desde web.config
                 var relativeFolder = ConfigurationManager.AppSettings["PlatosImagenesRelativePath"];
                 if (string.IsNullOrWhiteSpace(relativeFolder))
@@ -257,15 +265,14 @@ namespace smartlunch_api.Controllers
 
                 // Construir ruta física del archivo
                 var physicalFolder = HttpContext.Current.Server.MapPath("~" + relativeFolder);
-                var filePath = Path.Combine(physicalFolder, nombreArchivo);
+                var filePath = Path.Combine(physicalFolder, nombreArchivoSeguro);
 
-                // Validar que el archivo existe y está dentro de la carpeta permitida
-                if (!File.Exists(filePath) || !filePath.StartsWith(physicalFolder, StringComparison.OrdinalIgnoreCase))
+                if (!File.Exists(filePath))
                     return new HttpResponseMessage(HttpStatusCode.NotFound);
 
                 // Leer el archivo
                 var fileBytes = File.ReadAllBytes(filePath);
-                var extension = Path.GetExtension(nombreArchivo)?.ToLowerInvariant();
+                var extension = Path.GetExtension(nombreArchivoSeguro)?.ToLowerInvariant();
 
                 // Determinar content type
                 string contentType = "image/jpeg";

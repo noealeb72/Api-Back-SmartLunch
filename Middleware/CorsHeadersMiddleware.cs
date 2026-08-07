@@ -51,14 +51,13 @@ namespace smartlunch_api.Middleware
         private static string[] GetAllowedOrigins()
         {
             var value = ConfigurationManager.AppSettings["CorsAllowedOrigins"] ?? "";
-            var origins = value
+            // Sin whitelist configurada, no permitir ningún origen (fail closed) — no hardcodear
+            // orígenes de respaldo acá, menos aún IPs internas del servidor.
+            return value
                 .Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(o => o.Trim())
                 .Where(o => !string.IsNullOrEmpty(o))
                 .ToArray();
-            if (origins.Length == 0)
-                return new[] { "http://localhost:8000", "http://localhost:4200", "http://10.3.0.4:4200", "http://10.3.0.4:8000" };
-            return origins;
         }
     }
 
