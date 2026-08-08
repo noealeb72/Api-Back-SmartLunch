@@ -6,6 +6,7 @@ using System.Data.Entity.Validation;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using smartlunch_api.App_Start;
 using smartlunch_api.Dtos;
 using smartlunch_api.Models;
@@ -19,6 +20,8 @@ namespace smartlunch_api.Services
     {
         PagedResultDto<UsuarioListadoDto> ObtenerLista(int page, int pageSize, string search, int? plantaId, int? centroCostoId, int? proyectoId, int? jerarquiaId, int? planNutricionalId, bool estado);
         UsuarioDetalleDto ObtenerPorId(int id);
+        // Versión async: usada por el polling de Inicio (cada 2s) para no bloquear un hilo de IIS por request.
+        Task<UsuarioDetalleDto> ObtenerPorIdAsync(int id);
         UsuarioBaseDto ObtenerLegajo(int id);
         UsuarioBaseDto ObtenerPorLegajo(int legajo);
         UsuarioDetalleDto CrearUsuario(UsuarioCreateDto dto, string username);
@@ -377,6 +380,89 @@ namespace smartlunch_api.Services
             catch (Exception ex) when (!(ex is Exception && ex.Message.Contains("Usuario no encontrado")))
             {
                 _logger?.LogError("ObtenerPorId: Error al obtener usuario", ex, new { UsuarioId = id });
+                throw;
+            }
+        }
+
+        // Versión async del método anterior: usada por el polling de Inicio (cada 2s) para no bloquear
+        // un hilo de IIS por request mientras espera a SQL Server.
+        public async Task<UsuarioDetalleDto> ObtenerPorIdAsync(int id)
+        {
+            if (id <= 0)
+                throw new Exception("El ID del usuario debe ser mayor a 0.");
+
+            try
+            {
+                using (var ctx = new DataContext())
+                {
+                    ctx.Configuration.LazyLoadingEnabled = false;
+
+                    var entity = await ctx.sl_usuario
+                        .Include(u => u.planta)
+                        .Include(u => u.centrodecosto)
+                        .Include(u => u.proyecto)
+                        .Include(u => u.jerarquia)
+                        .Include(u => u.plannutricional)
+                        .Include(u => u.Logins)
+                        .Where(u => u.id == id && !u.deletemark)
+                        .FirstOrDefaultAsync();
+
+                    if (entity == null)
+                    {
+                        _logger?.LogWarning("ObtenerPorIdAsync: Usuario no encontrado", new { UsuarioId = id });
+                        throw new Exception("Usuario no encontrado.");
+                    }
+
+                    var login = entity.Logins
+                        .Where(l => !l.deletemark)
+                        .OrderByDescending(l => l.createdate)
+                        .FirstOrDefault();
+
+                    var resultado = new UsuarioDetalleDto
+                    {
+                        Id = entity.id,
+                        Nombre = entity.nombre,
+                        Apellido = entity.apellido,
+                        Legajo = entity.legajo,
+                        Dni = entity.dni,
+                        Cuil = entity.cuil,
+                        Domicilio = entity.domicilio,
+                        FechaIngreso = entity.fechaingreso,
+                        Contrato = entity.contrato,
+                        Plannutricional_id = entity.plannutricional_id,
+                        PlanNutricionalNombre = entity.plannutricional != null ? entity.plannutricional.nombre : null,
+                        PlantaId = entity.planta_id,
+                        PlantaNombre = entity.planta != null ? entity.planta.nombre : null,
+                        CentroCostoId = entity.centrodecosto_id,
+                        CentroCostoNombre = entity.centrodecosto != null ? entity.centrodecosto.nombre : null,
+                        ProyectoId = entity.proyecto_id,
+                        ProyectoNombre = entity.proyecto != null ? entity.proyecto.nombre : null,
+                        JerarquiaId = entity.jerarquia_id,
+                        JerarquiaNombre = entity.jerarquia != null ? entity.jerarquia.nombre : null,
+                        BonificacionesInvitado = (int)entity.bonificaciones_invitado,
+                        Pedidos = (int)entity.pedidos,
+                        Bonificaciones = (int)entity.bonificaciones,
+                        Descuento = entity.jerarquia != null ? entity.jerarquia.bonificacion : 0,
+                        Email = entity.email,
+                        Telefono = entity.telefono,
+                        Foto = entity.foto,
+                        Username = login != null ? login.username : null,
+                        Activo = !entity.deletemark
+                    };
+
+                    _logger?.LogInformation("ObtenerPorIdAsync: Usuario obtenido exitosamente", new
+                    {
+                        UsuarioId = id,
+                        Legajo = resultado.Legajo,
+                        Nombre = $"{resultado.Nombre} {resultado.Apellido}"
+                    });
+
+                    return resultado;
+                }
+            }
+            catch (Exception ex) when (!(ex is Exception && ex.Message.Contains("Usuario no encontrado")))
+            {
+                _logger?.LogError("ObtenerPorIdAsync: Error al obtener usuario", ex, new { UsuarioId = id });
                 throw;
             }
         }

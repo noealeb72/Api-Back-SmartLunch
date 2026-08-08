@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Claims;
+using System.Threading.Tasks;
 using System.Web.Http;
 using System.Web.Http.Cors;
 
@@ -28,7 +29,7 @@ namespace smartlunch_api.Controllers
         // =====================================
         [HttpGet]
         [Route("web")]
-        public HttpResponseMessage ObtenerBaseWeb()
+        public async Task<HttpResponseMessage> ObtenerBaseWeb()
         {
             try
             {
@@ -36,7 +37,7 @@ namespace smartlunch_api.Controllers
                 if (usuarioId <= 0)
                     return JsonError("Usuario no identificado.", HttpStatusCode.Unauthorized);
 
-                var turnos = _inicioService.ObtenerWeb(usuarioId);
+                var turnos = await _inicioService.ObtenerWebAsync(usuarioId);
                 return JsonOk(turnos);
             }
             catch (Exception ex)
@@ -55,7 +56,7 @@ namespace smartlunch_api.Controllers
         /// <returns>Datos de inicio: Usuario, Turnos, Menú del día, Comandas del turno seleccionado</returns>
         [HttpGet]
         [Route("web-actualizado")]
-        public HttpResponseMessage ObtenerWebActualizado([FromUri(Name = "turno")] int turnoId = 0, [FromUri] string fecha = null)
+        public async Task<HttpResponseMessage> ObtenerWebActualizado([FromUri(Name = "turno")] int turnoId = 0, [FromUri] string fecha = null)
         {
             try
             {
@@ -74,7 +75,7 @@ namespace smartlunch_api.Controllers
                         return JsonError("Formato de fecha inválido. Use YYYY-MM-DD.", HttpStatusCode.BadRequest);
                 }
 
-                var resultado = _inicioService.ObtenerWebActualizado(usuarioId, turnoId, fechaParam);
+                var resultado = await _inicioService.ObtenerWebActualizadoAsync(usuarioId, turnoId, fechaParam);
                 return JsonOk(resultado);
             }
             catch (Exception ex)

@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using smartlunch_api.Dtos;
 using smartlunch_api.Models;
 using smartlunch_api.Services;
 using System.IO;
 using System.Text;
+using System.Data.Entity;
 
 namespace smartlunch_api.Service
 {
@@ -22,6 +24,14 @@ namespace smartlunch_api.Service
         InicioWebDto ObtenerWebActualizado(UsuarioBaseDto usuario, int turnoId, DateTime? fecha = null); // Sobrecarga: acepta usuario completo
         InicioWebDto ObtenerTotemActualizado(UsuarioBaseDto usuario, int turnoId, DateTime? fecha = null); // Para tótem sin token
         InicioBaseDto ObtenerBase(int usuarioId);
+
+        // Versiones async: usadas por /api/inicio/web y /api/inicio/web-actualizado, que el front consulta
+        // cada 2 segundos mientras el comensal tiene la pantalla de Inicio abierta. Sin esto, cada request
+        // bloqueaba un hilo de IIS durante todo el tiempo de las consultas a SQL Server.
+        Task<InicioWebDto> ObtenerWebAsync(int usuarioId, DateTime? fecha = null);
+        Task<InicioWebDto> ObtenerWebAsync(UsuarioBaseDto usuario, DateTime? fecha = null);
+        Task<InicioWebDto> ObtenerWebActualizadoAsync(int usuarioId, int turnoId, DateTime? fecha = null);
+        Task<InicioWebDto> ObtenerWebActualizadoAsync(UsuarioBaseDto usuario, int turnoId, DateTime? fecha = null);
     }
 
     // ============================================
@@ -226,6 +236,55 @@ namespace smartlunch_api.Service
             }
         }
 
+        // Versión async del método anterior: usada por el polling de Inicio (cada 2s).
+        private async Task<UsuarioBaseDto> ObtenerUsuarioBasePorIdAsync(int usuarioId)
+        {
+            try
+            {
+                var usuario = await _servicioUsuario.ObtenerPorIdAsync(usuarioId);
+                if (usuario == null)
+                    throw new Exception($"No se encontró el usuario con ID {usuarioId}.");
+
+                if (!usuario.Activo)
+                {
+                    _logger?.LogWarning("ObtenerUsuarioBasePorIdAsync: Usuario inactivo", new { UsuarioId = usuarioId });
+                    throw new Exception($"El usuario con ID {usuarioId} está inactivo.");
+                }
+
+                var bonifAplicadas = await ObtenerBonificacionesAplicadasHoyAsync(usuario.Id, DateTime.Today);
+
+                return new UsuarioBaseDto
+                {
+                    Id = usuario.Id,
+                    Nombre = usuario.Nombre,
+                    Apellido = usuario.Apellido,
+                    Legajo = usuario.Legajo,
+                    Dni = usuario.Dni,
+                    Plannutricional_id = usuario.Plannutricional_id,
+                    PlanNutricionalNombre = usuario.PlanNutricionalNombre,
+                    PlantaId = usuario.PlantaId ?? 0,
+                    PlantaNombre = usuario.PlantaNombre,
+                    CentroCostoId = usuario.CentroCostoId ?? 0,
+                    CentroCostoNombre = usuario.CentroCostoNombre,
+                    ProyectoId = usuario.ProyectoId ?? 0,
+                    ProyectoNombre = usuario.ProyectoNombre,
+                    JerarquiaId = usuario.JerarquiaId ?? 0,
+                    JerarquiaNombre = usuario.JerarquiaNombre,
+                    Bonificaciones = usuario.Bonificaciones,
+                    BonificacionesInvitado = usuario.BonificacionesInvitado,
+                    Pedidos = usuario.Pedidos,
+                    BonificacionesAplicadas = bonifAplicadas,
+                    Descuento = usuario.Descuento,
+                    Activo = usuario.Activo
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError("ObtenerUsuarioBasePorIdAsync: Error al obtener usuario", ex, new { UsuarioId = usuarioId });
+                throw;
+            }
+        }
+
         /// <summary>
         /// Calcula la cantidad de bonificaciones aplicadas para un usuario en una fecha.
         /// Cuenta en sl_comanda: mismo usuario, día de la fecha, bonificado = true.
@@ -239,6 +298,24 @@ namespace smartlunch_api.Service
             {
                 ctx.Configuration.LazyLoadingEnabled = false;
                 return ctx.sl_comanda.Count(c => c.usuario_id == usuarioId
+                        && !c.deletemark
+                        && c.fecha >= hoy
+                        && c.fecha < diaSiguiente
+                        && c.bonificado == true
+                        && c.estado != "D"
+                        && c.estado != "C");
+            }
+        }
+
+        // Versión async del método anterior.
+        private async Task<int> ObtenerBonificacionesAplicadasHoyAsync(int usuarioId, DateTime fecha)
+        {
+            var hoy = fecha.Date;
+            var diaSiguiente = hoy.AddDays(1);
+            using (var ctx = new DataContext())
+            {
+                ctx.Configuration.LazyLoadingEnabled = false;
+                return await ctx.sl_comanda.CountAsync(c => c.usuario_id == usuarioId
                         && !c.deletemark
                         && c.fecha >= hoy
                         && c.fecha < diaSiguiente
@@ -558,6 +635,107 @@ namespace smartlunch_api.Service
             }
         }
 
+        // Versión async del método anterior: usada por el polling de Inicio (cada 2s).
+        private async Task<InicioBaseDto> ObtenerBaseComunAsync(UsuarioBaseDto usuario, DateTime? fecha = null)
+        {
+            if (usuario == null)
+                throw new ArgumentNullException(nameof(usuario), "El usuario no puede ser nulo.");
+
+            if (!usuario.Activo)
+                throw new Exception("El usuario está inactivo.");
+
+            if (usuario.PlantaId <= 0)
+                throw new Exception("El usuario no tiene planta asignada.");
+
+            var hoy = fecha?.Date ?? DateTime.Today;
+            var hoyActual = DateTime.Today;
+            if (hoy > hoyActual)
+                throw new Exception("No se puede consultar fechas futuras.");
+            if ((hoyActual - hoy).Days > 30)
+                throw new Exception("No se puede consultar fechas con más de 30 días de antigüedad.");
+
+            try
+            {
+                var turnos = (await _servicioTurno.ObtenerHorarioComboAsync()).ToList();
+
+                if (turnos == null || !turnos.Any())
+                {
+                    _logger?.LogWarning("ObtenerBaseComunAsync: No hay turnos disponibles");
+                    throw new Exception("No hay turnos disponibles.");
+                }
+
+                var primerTurno = turnos.FirstOrDefault(t => t != null && t.Id > 0);
+                if (primerTurno == null)
+                    throw new Exception("No se pudo obtener un turno válido.");
+
+                int? centroCostoId = usuario.CentroCostoId > 0 ? (int?)usuario.CentroCostoId : null;
+                int? proyectoId = usuario.ProyectoId > 0 ? (int?)usuario.ProyectoId : null;
+                int? jerarquiaId = usuario.JerarquiaId > 0 ? (int?)usuario.JerarquiaId : null;
+
+                var menuDia = await _servicioMenuDia.ObtenerMenuPorTurnoAsync(
+                    hoy,
+                    usuario.PlantaId,
+                    primerTurno.Id,
+                    centroCostoId,
+                    proyectoId,
+                    jerarquiaId,
+                    usuario.Plannutricional_id,
+                    soloConStock: true
+                ) ?? new List<MenuddPorTurnoDto>();
+
+                int bonificacionesAplicadasHoy = await ObtenerBonificacionesAplicadasHoyAsync(usuario.Id, hoy);
+
+                var usuarioConBonificaciones = new UsuarioBaseDto
+                {
+                    Id = usuario.Id,
+                    Nombre = usuario.Nombre,
+                    Apellido = usuario.Apellido,
+                    Legajo = usuario.Legajo,
+                    Dni = usuario.Dni,
+                    Plannutricional_id = usuario.Plannutricional_id,
+                    PlanNutricionalNombre = usuario.PlanNutricionalNombre,
+                    PlantaId = usuario.PlantaId,
+                    PlantaNombre = usuario.PlantaNombre,
+                    CentroCostoId = usuario.CentroCostoId,
+                    CentroCostoNombre = usuario.CentroCostoNombre,
+                    ProyectoId = usuario.ProyectoId,
+                    ProyectoNombre = usuario.ProyectoNombre,
+                    JerarquiaId = usuario.JerarquiaId,
+                    JerarquiaNombre = usuario.JerarquiaNombre,
+                    BonificacionesInvitado = usuario.BonificacionesInvitado,
+                    Pedidos = usuario.Pedidos,
+                    Bonificaciones = usuario.Bonificaciones,
+                    BonificacionesAplicadas = bonificacionesAplicadasHoy,
+                    Descuento = usuario.Descuento,
+                    Activo = usuario.Activo
+                };
+
+                _logger?.LogInformation("ObtenerBaseComunAsync: Datos base obtenidos exitosamente", new
+                {
+                    UsuarioId = usuario.Id,
+                    TotalTurnos = turnos.Count,
+                    TotalMenuItems = menuDia.Count
+                });
+
+                return new InicioBaseDto
+                {
+                    Usuario = usuarioConBonificaciones,
+                    Turnos = turnos,
+                    MenuDelDia = menuDia
+                };
+            }
+            catch (Exception ex) when (!(ex is Exception && (ex.Message.Contains("No hay turnos") || ex.Message.Contains("no tiene planta") || ex.Message.Contains("inactivo") || ex.Message.Contains("fechas"))))
+            {
+                _logger?.LogError("ObtenerBaseComunAsync: Error al obtener datos base", ex, new
+                {
+                    UsuarioId = usuario?.Id,
+                    PlantaId = usuario?.PlantaId,
+                    Fecha = hoy
+                });
+                throw;
+            }
+        }
+
         public InicioWebDto ObtenerWeb(int usuarioId, DateTime? fecha = null)
         {
             // ===================== VALIDACIÓN DE ENTRADA =====================
@@ -694,6 +872,68 @@ namespace smartlunch_api.Service
             catch (Exception ex) when (!(ex is Exception && (ex.Message.Contains("No hay turnos") || ex.Message.Contains("fechas"))))
             {
                 _logger?.LogError("ObtenerWeb: Error al obtener datos para web (usuario completo)", ex, new
+                {
+                    UsuarioId = usuario?.Id,
+                    Fecha = hoy
+                });
+                throw;
+            }
+        }
+
+        // Versión async: usada por /api/inicio/web.
+        public async Task<InicioWebDto> ObtenerWebAsync(int usuarioId, DateTime? fecha = null)
+        {
+            if (usuarioId <= 0)
+                throw new Exception("El ID del usuario debe ser mayor a 0.");
+
+            var usuarioBase = await ObtenerUsuarioBasePorIdAsync(usuarioId);
+            return await ObtenerWebAsync(usuarioBase, fecha);
+        }
+
+        // Versión async: sobrecarga que acepta usuario completo (sin buscar en BD).
+        public async Task<InicioWebDto> ObtenerWebAsync(UsuarioBaseDto usuario, DateTime? fecha = null)
+        {
+            if (usuario == null)
+                throw new ArgumentNullException(nameof(usuario), "El usuario no puede ser nulo.");
+
+            var hoy = fecha?.Date ?? DateTime.Today;
+            var hoyActual = DateTime.Today;
+            if (hoy > hoyActual)
+                throw new Exception("No se puede consultar fechas futuras.");
+            if ((hoyActual - hoy).Days > 30)
+                throw new Exception("No se puede consultar fechas con más de 30 días de antigüedad.");
+
+            try
+            {
+                var baseDto = await ObtenerBaseComunAsync(usuario, fecha);
+
+                var primerTurno = baseDto.Turnos?.FirstOrDefault();
+                if (primerTurno == null)
+                    throw new Exception("No hay turnos disponibles.");
+
+                var comanda = await _servicioPedido.ObtenerXDiaAsync(
+                    hoy,
+                    hoy,
+                    baseDto.Usuario.Id,
+                    primerTurno.Id,
+                    baseDto.Usuario.PlantaId,
+                    baseDto.Usuario.CentroCostoId,
+                    baseDto.Usuario.ProyectoId,
+                    baseDto.Usuario.JerarquiaId,
+                    estado: null
+                ) ?? new List<ComandaDetalleDto>();
+
+                return new InicioWebDto
+                {
+                    Usuario = baseDto.Usuario,
+                    Turnos = baseDto.Turnos,
+                    MenuDelDia = baseDto.MenuDelDia,
+                    PlatosPedidos = comanda
+                };
+            }
+            catch (Exception ex) when (!(ex is Exception && (ex.Message.Contains("No hay turnos") || ex.Message.Contains("fechas"))))
+            {
+                _logger?.LogError("ObtenerWebAsync: Error al obtener datos para web (usuario completo)", ex, new
                 {
                     UsuarioId = usuario?.Id,
                     Fecha = hoy
@@ -913,6 +1153,97 @@ namespace smartlunch_api.Service
             catch (Exception ex) when (!(ex is Exception && (ex.Message.Contains("no está disponible") || ex.Message.Contains("fechas"))))
             {
                 _logger?.LogError("ObtenerWebActualizado: Error al obtener datos para web actualizado (usuario completo)", ex, new
+                {
+                    UsuarioId = usuario?.Id,
+                    TurnoId = turnoId,
+                    Fecha = hoy
+                });
+                throw;
+            }
+        }
+
+        // Versión async: usada por /api/inicio/web-actualizado, el polling que el front dispara cada 2s.
+        public async Task<InicioWebDto> ObtenerWebActualizadoAsync(int usuarioId, int turnoId, DateTime? fecha = null)
+        {
+            if (usuarioId <= 0)
+                throw new Exception("El ID del usuario debe ser mayor a 0.");
+
+            var usuarioBase = await ObtenerUsuarioBasePorIdAsync(usuarioId);
+            return await ObtenerWebActualizadoAsync(usuarioBase, turnoId, fecha);
+        }
+
+        // Versión async: sobrecarga que acepta usuario completo (sin buscar en BD).
+        public async Task<InicioWebDto> ObtenerWebActualizadoAsync(UsuarioBaseDto usuario, int turnoId, DateTime? fecha = null)
+        {
+            if (usuario == null)
+                throw new ArgumentNullException(nameof(usuario), "El usuario no puede ser nulo.");
+
+            var hoy = fecha?.Date ?? DateTime.Today;
+            var hoyActual = DateTime.Today;
+            if (hoy > hoyActual)
+                throw new Exception("No se puede consultar fechas futuras.");
+            if ((hoyActual - hoy).Days > 30)
+                throw new Exception("No se puede consultar fechas con más de 30 días de antigüedad.");
+
+            try
+            {
+                var baseDto = await ObtenerBaseComunAsync(usuario, fecha);
+
+                // Sin turno seleccionado (turnoId 0): devolver datos base con menú/pedidos vacíos.
+                if (turnoId <= 0)
+                {
+                    return new InicioWebDto
+                    {
+                        Usuario = baseDto.Usuario,
+                        Turnos = baseDto.Turnos,
+                        MenuDelDia = new List<MenuddPorTurnoDto>(),
+                        PlatosPedidos = new List<ComandaDetalleDto>()
+                    };
+                }
+
+                var turnoSeleccionado = baseDto.Turnos?.FirstOrDefault(t => t.Id == turnoId)
+                    ?? baseDto.Turnos?.FirstOrDefault();
+                if (turnoSeleccionado == null)
+                    throw new Exception("No hay turnos disponibles.");
+
+                int? centroCostoId = usuario.CentroCostoId > 0 ? (int?)usuario.CentroCostoId : null;
+                int? proyectoId = usuario.ProyectoId > 0 ? (int?)usuario.ProyectoId : null;
+                int? jerarquiaId = usuario.JerarquiaId > 0 ? (int?)usuario.JerarquiaId : null;
+
+                var menuDia = await _servicioMenuDia.ObtenerMenuPorTurnoAsync(
+                    hoy,
+                    usuario.PlantaId,
+                    turnoSeleccionado.Id,
+                    centroCostoId,
+                    proyectoId,
+                    jerarquiaId,
+                    usuario.Plannutricional_id,
+                    soloConStock: true
+                ) ?? new List<MenuddPorTurnoDto>();
+
+                var comanda = await _servicioPedido.ObtenerXDiaAsync(
+                    hoy,
+                    hoy,
+                    usuario.Id,
+                    turnoSeleccionado.Id,
+                    usuario.PlantaId,
+                    usuario.CentroCostoId,
+                    usuario.ProyectoId,
+                    usuario.JerarquiaId,
+                    estado: null
+                ) ?? new List<ComandaDetalleDto>();
+
+                return new InicioWebDto
+                {
+                    Usuario = baseDto.Usuario,
+                    Turnos = baseDto.Turnos,
+                    MenuDelDia = menuDia,
+                    PlatosPedidos = comanda
+                };
+            }
+            catch (Exception ex) when (!(ex is Exception && (ex.Message.Contains("no está disponible") || ex.Message.Contains("fechas"))))
+            {
+                _logger?.LogError("ObtenerWebActualizadoAsync: Error al obtener datos para web actualizado (usuario completo)", ex, new
                 {
                     UsuarioId = usuario?.Id,
                     TurnoId = turnoId,

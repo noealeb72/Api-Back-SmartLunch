@@ -6,6 +6,7 @@ using System.Data.Entity.Validation;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using smartlunch_api.Dtos;
 using smartlunch_api.Models;
 using smartlunch_api.Models.DTOs;
@@ -26,6 +27,7 @@ namespace smartlunch_api.Services
         void ActivarTurno(int id, string username);
         IEnumerable<TurnoComboDto> ObtenerActivosParaCombo();
         IEnumerable<TurnoUpdateDto> ObtenerHorarioCombo();
+        Task<IEnumerable<TurnoUpdateDto>> ObtenerHorarioComboAsync();
         List<TurnoImpresionDto> ObtenerDatosImpresion(TurnoImpresionRequestDto request);
     }
 
@@ -803,6 +805,54 @@ namespace smartlunch_api.Services
             catch (Exception ex)
             {
                 _logger?.LogError("ObtenerHorarioCombo: Error al obtener horarios para combo", ex);
+                throw;
+            }
+        }
+
+        // Versión async: usada por el polling de Inicio (cada 2s) para no bloquear un hilo de IIS por request.
+        public async Task<IEnumerable<TurnoUpdateDto>> ObtenerHorarioComboAsync()
+        {
+            try
+            {
+                var ahora = DateTime.Now.TimeOfDay;
+
+                using (var ctx = new DataContext())
+                {
+                    ctx.Configuration.LazyLoadingEnabled = false;
+
+                    var turnosDb = await ctx.sl_turno
+                        .Where(t => !t.deletemark)
+                        .ToListAsync();
+
+                    var turnosNorm = turnosDb
+                        .Select(t => new
+                        {
+                            Turno = t,
+                            Desde = t.horadesde,
+                            Hasta = (t.horahasta == TimeSpan.Zero
+                                        ? TimeSpan.FromHours(24)
+                                        : t.horahasta)
+                        })
+                        .ToList();
+
+                    var turnosCombo = turnosNorm
+                        .Where(x => x.Hasta > ahora)
+                        .OrderBy(x => x.Desde)
+                        .Select(x => new TurnoUpdateDto
+                        {
+                            Id = x.Turno.id,
+                            Nombre = x.Turno.nombre,
+                            HoraDesde = x.Turno.horadesde,
+                            HoraHasta = x.Turno.horahasta,
+                        })
+                        .ToList();
+
+                    return turnosCombo;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError("ObtenerHorarioComboAsync: Error al obtener horarios para combo", ex);
                 throw;
             }
         }

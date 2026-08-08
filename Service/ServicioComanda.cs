@@ -8,6 +8,7 @@ using System.Data.Entity.Validation;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace smartlunch_api.Services
 {
@@ -31,6 +32,8 @@ namespace smartlunch_api.Services
         List<ComandaDetalleDto> ObtenerXDia(DateTime fecha, int usuarioId);
         // Método sobrecargado con más parámetros (usado internamente por ServicioInicio)
         List<ComandaDetalleDto> ObtenerXDia(DateTime? fechaDesde, DateTime? fechaHasta, int usuarioId, int turnoId, int plantaId, int centroCostoId, int proyectoId, int jerarquiaId, string estado);
+        // Versión async del sobrecargado anterior: usada por el polling de Inicio (cada 2s) para no bloquear un hilo de IIS por request.
+        Task<List<ComandaDetalleDto>> ObtenerXDiaAsync(DateTime? fechaDesde, DateTime? fechaHasta, int usuarioId, int turnoId, int plantaId, int centroCostoId, int proyectoId, int jerarquiaId, string estado);
         List<ComandaImpresionDto> ObtenerDatosImpresion(ComandaImpresionRequestDto request);
     }
 
@@ -1774,6 +1777,128 @@ namespace smartlunch_api.Services
             catch (Exception ex)
             {
                 _logger?.LogError("ObtenerXDia: Error al obtener comandas por día", ex, new
+                {
+                    UsuarioId = usuarioId,
+                    ExceptionType = ex.GetType().Name
+                });
+                throw;
+            }
+        }
+
+        // Versión async del método anterior: usada por el polling de Inicio (cada 2s) para no bloquear
+        // un hilo de IIS por request mientras espera a SQL Server.
+        public async Task<List<ComandaDetalleDto>> ObtenerXDiaAsync(
+          DateTime? fechaDesde,
+          DateTime? fechaHasta,
+          int usuarioId,
+          int turnoId,
+          int plantaId,
+          int centroCostoId,
+          int proyectoId,
+          int jerarquiaId,
+          string estado)
+        {
+            if (usuarioId <= 0)
+                throw new Exception("El ID del usuario debe ser mayor a 0.");
+
+            if (fechaDesde.HasValue && fechaHasta.HasValue && fechaDesde.Value > fechaHasta.Value)
+                throw new Exception("La fecha desde no puede ser mayor que la fecha hasta.");
+
+            try
+            {
+                using (var ctx = new DataContext())
+                {
+                    ctx.Configuration.LazyLoadingEnabled = false;
+
+                    var query = ctx.sl_comanda
+                        .Where(c => !c.deletemark)
+                        .Include(c => c.Usuario)
+                        .Include(c => c.Plato)
+                        .Include("Plato.plannutricional")
+                        .Include(c => c.Turno)
+                        .Include(c => c.Planta)
+                        .Include(c => c.CentroDeCosto)
+                        .Include(c => c.Proyecto)
+                        .Include(c => c.Jerarquia)
+                        .AsQueryable();
+
+                    if (fechaDesde.HasValue)
+                    {
+                        var desde = fechaDesde.Value.Date;
+                        query = query.Where(c => c.fecha >= desde);
+                    }
+
+                    if (fechaHasta.HasValue)
+                    {
+                        var hastaExclusivo = fechaHasta.Value.Date.AddDays(1);
+                        query = query.Where(c => c.fecha < hastaExclusivo);
+                    }
+
+                    if (usuarioId > 0)
+                        query = query.Where(c => c.usuario_id == usuarioId);
+
+                    if (plantaId > 0)
+                        query = query.Where(c => c.planta_id == plantaId);
+
+                    if (centroCostoId > 0)
+                        query = query.Where(c => c.centrodecosto_id == centroCostoId);
+
+                    if (proyectoId > 0)
+                        query = query.Where(c => c.proyecto_id == proyectoId);
+
+                    if (jerarquiaId > 0)
+                        query = query.Where(c => c.jerarquia_id == jerarquiaId);
+
+                    query = query.Where(c => c.estado == "P" || c.estado == "E");
+
+                    var items = await query
+                        .OrderByDescending(c => c.fecha)
+                        .ThenByDescending(c => c.id)
+                        .Select(c => new ComandaDetalleDto
+                        {
+                            Id = c.id,
+                            Npedido = c.npedido,
+                            Fecha = c.fecha,
+                            Monto = c.monto,
+                            Bonificado = c.bonificado,
+                            Invitado = c.invitado,
+                            Calificacion = c.calificacion,
+                            Estado = c.estado,
+                            Comentario = c.comentario,
+                            UsuarioId = c.usuario_id,
+                            UsuarioNombre = c.Usuario.nombre + " " + c.Usuario.apellido,
+                            PlatoId = c.plato_id,
+                            PlatoDescripcion = c.Plato.descripcion,
+                            TurnoId = c.turno_id,
+                            TurnoNombre = c.Turno.nombre,
+                            PlantaId = c.planta_id,
+                            PlantaDescripcion = c.Planta.nombre,
+                            CentroDeCostoId = c.centrodecosto_id,
+                            CentroDeCostoDescripcion = c.CentroDeCosto.descripcion,
+                            ProyectoId = c.proyecto_id,
+                            ProyectoDescripcion = c.Proyecto.nombre,
+                            JerarquiaId = c.jerarquia_id,
+                            JerarquiaDescripcion = c.Jerarquia.nombre,
+                            PlatoImporte = c.Plato.costo,
+                            CostoProveedor = c.costo_proveedor,
+                            Foto = c.Plato.foto,
+                            NutricionalId = c.Plato.plannutricional_id,
+                            NutricionalNombre = c.Plato.plannutricional.nombre,
+                        })
+                        .ToListAsync();
+
+                    _logger?.LogInformation("ObtenerXDiaAsync: Consulta completada exitosamente", new
+                    {
+                        UsuarioId = usuarioId,
+                        ItemsReturned = items.Count
+                    });
+
+                    return items;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError("ObtenerXDiaAsync: Error al obtener comandas por día", ex, new
                 {
                     UsuarioId = usuarioId,
                     ExceptionType = ex.GetType().Name

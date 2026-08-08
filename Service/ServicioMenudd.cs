@@ -7,6 +7,7 @@ using System.Data.Entity.Validation;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using smartlunch_api.Dtos;
 using smartlunch_api.Models;
 
@@ -28,6 +29,8 @@ namespace smartlunch_api.Services
         //List<MenuddPorTurnoDto> ObtenerMenuPorTurno(int turnoId, DateTime fecha, int plantaId);
         // Método sobrecargado con más parámetros (usado internamente por ServicioInicio)
         List<MenuddPorTurnoDto> ObtenerMenuPorTurno(DateTime fecha, int? plantaId, int turnoId, int? centroCostoId, int? proyectoId, int? jerarquiaId,int? nutricionalId, bool soloConStock, int? usuarioId = null, string estadoComanda = null);
+        // Versión async del mismo método: usada por el polling de Inicio (cada 2s) para no bloquear un hilo de IIS por request.
+        Task<List<MenuddPorTurnoDto>> ObtenerMenuPorTurnoAsync(DateTime fecha, int? plantaId, int turnoId, int? centroCostoId, int? proyectoId, int? jerarquiaId, int? nutricionalId, bool soloConStock, int? usuarioId = null, string estadoComanda = null);
         List<MenuddImpresionDto> ObtenerDatosImpresion(MenuddImpresionRequestDto request);
         List<MenuddComedorDisponibleDto> ObtenerComedoresDisponibles(DateTime fecha, int turnoId, int? centroCostoId, int? proyectoId, int? jerarquiaId, int? nutricionalId, bool soloConStock);
     }
@@ -1135,6 +1138,135 @@ namespace smartlunch_api.Services
             catch (Exception ex)
             {
                 _logger?.LogError("ObtenerMenuPorTurno: Error al obtener menú por turno", ex, new
+                {
+                    Fecha = fecha,
+                    PlantaId = plantaId,
+                    TurnoId = turnoId,
+                    ExceptionType = ex.GetType().Name
+                });
+                throw;
+            }
+        }
+
+        // Versión async del método anterior: usada por el polling de Inicio (cada 2s) para no bloquear
+        // un hilo de IIS por request mientras espera a SQL Server.
+        public async Task<List<MenuddPorTurnoDto>> ObtenerMenuPorTurnoAsync(
+            DateTime fecha,
+            int? plantaId,
+            int turnoId,
+            int? centroCostoId,
+            int? proyectoId,
+            int? jerarquiaId,
+            int? nutricionalId,
+            bool soloConStock = true,
+            int? usuarioId = null,
+            string estadoComanda = null)
+        {
+            if (plantaId <= 0)
+                throw new Exception("El ID de planta debe ser mayor a 0.");
+
+            if (turnoId <= 0)
+                throw new Exception("El ID de turno debe ser mayor a 0.");
+
+            try
+            {
+                using (var ctx = new DataContext())
+                {
+                    ctx.Configuration.LazyLoadingEnabled = false;
+
+                    var query = ctx.sl_menudd
+                        .Include(m => m.Plato)
+                        .Include(m => m.Turno)
+                        .Include(m => m.Planta)
+                        .Include(m => m.CentroDeCosto)
+                        .Include(m => m.Proyecto)
+                        .Include(m => m.Jerarquia)
+                        .Where(m =>
+                            !m.deletemark &&
+                            m.fecha == fecha.Date &&
+                            m.turno_id == turnoId);
+
+                    if (plantaId.HasValue && plantaId.Value > 0)
+                        query = query.Where(m => m.planta_id == plantaId);
+
+                    if (centroCostoId.HasValue && centroCostoId.Value > 0)
+                        query = query.Where(m => m.centrodecosto_id == centroCostoId.Value);
+
+                    if (proyectoId.HasValue && proyectoId.Value > 0)
+                        query = query.Where(m => m.proyecto_id == proyectoId.Value);
+
+                    if (jerarquiaId.HasValue && jerarquiaId.Value > 0)
+                        query = query.Where(m => m.jerarquia_id == jerarquiaId.Value);
+
+                    if (nutricionalId.HasValue && nutricionalId.Value > 0)
+                        query = query.Where(m => m.Plato.plannutricional_id == nutricionalId.Value);
+
+                    if (soloConStock)
+                        query = query.Where(m => (m.cantidad - m.comandas) > 0);
+
+                    var menusList = await query
+                        .Include("Plato.plannutricional")
+                        .ToListAsync();
+
+                    var menuddIds = menusList.Select(m => m.id).ToList();
+                    var comandasRaw = await ctx.sl_comanda
+                        .Where(c => !c.deletemark
+                                 && menuddIds.Contains(c.menudd_id)
+                                 && (usuarioId == null || c.usuario_id == usuarioId.Value))
+                        .ToListAsync();
+                    var comandas = comandasRaw
+                        .GroupBy(c => c.menudd_id)
+                        .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.id).FirstOrDefault());
+
+                    var items = menusList
+                        .OrderBy(m => m.Plato.descripcion)
+                        .Select(m =>
+                        {
+                            var comanda = comandas.ContainsKey(m.id) ? comandas[m.id] : null;
+                            var planNutricionalMenu = m.Plato?.plannutricional;
+
+                            return new MenuddPorTurnoDto
+                            {
+                                Id = m.id,
+                                Fecha = m.fecha,
+                                TurnoId = m.turno_id,
+                                TurnoNombre = m.Turno.nombre,
+                                PlatoId = m.plato_id,
+                                PlatoNombre = m.Plato.descripcion,
+                                Cantidad = (m.cantidad - m.comandas),
+                                Despachado = m.despachado,
+                                Disponible = m.cantidad - m.despachado,
+                                PlantaId = m.planta_id,
+                                PlantaNombre = m.Planta.nombre,
+                                CentroCostoId = m.centrodecosto_id,
+                                CentroCostoNombre = m.CentroDeCosto.nombre,
+                                ProyectoId = m.proyecto_id,
+                                ProyectoNombre = m.Proyecto.nombre,
+                                JerarquiaId = m.jerarquia_id,
+                                JerarquiaNombre = m.Jerarquia != null ? m.Jerarquia.nombre : null,
+                                Foto = m.Plato.foto,
+                                NutricionalId = planNutricionalMenu != null ? planNutricionalMenu.id : (int?)null,
+                                NutricionalNombre = planNutricionalMenu != null ? planNutricionalMenu.nombre : null,
+                                Importe = m.Plato.costo,
+                                Estado = comanda != null ? comanda.estado : null
+                            };
+                        })
+                        .ToList();
+
+                    _logger?.LogInformation("ObtenerMenuPorTurnoAsync: Búsqueda completada", new
+                    {
+                        Fecha = fecha,
+                        PlantaId = plantaId,
+                        TurnoId = turnoId,
+                        Resultados = items.Count
+                    });
+
+                    return items;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError("ObtenerMenuPorTurnoAsync: Error al obtener menú por turno", ex, new
                 {
                     Fecha = fecha,
                     PlantaId = plantaId,
