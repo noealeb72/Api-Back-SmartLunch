@@ -177,13 +177,13 @@ namespace smartlunch_api.Services
                             Telefono = u.telefono,
 
                             PlantaId = u.planta_id,
-                            PlantaNombre = u.planta != null ? u.planta.descripcion : null,
+                            PlantaNombre = u.planta != null ? u.planta.nombre : null,
 
                             CentroCostoId = u.centrodecosto_id,
-                            CentroCostoNombre = u.centrodecosto != null ? u.centrodecosto.descripcion : null,
+                            CentroCostoNombre = u.centrodecosto != null ? u.centrodecosto.nombre : null,
 
                             ProyectoId = u.proyecto_id,
-                            ProyectoNombre = u.proyecto != null ? u.proyecto.descripcion : null,
+                            ProyectoNombre = u.proyecto != null ? u.proyecto.nombre : null,
 
                             JerarquiaId = u.jerarquia_id,
                             JerarquiaNombre = u.jerarquia != null ? u.jerarquia.nombre : null,
@@ -346,11 +346,11 @@ namespace smartlunch_api.Services
                         Plannutricional_id = entity.plannutricional_id,
                         PlanNutricionalNombre = entity.plannutricional != null ? entity.plannutricional.nombre : null,
                         PlantaId = entity.planta_id,
-                        PlantaNombre = entity.planta != null ? entity.planta.descripcion : null,
+                        PlantaNombre = entity.planta != null ? entity.planta.nombre : null,
                         CentroCostoId = entity.centrodecosto_id,
-                        CentroCostoNombre = entity.centrodecosto != null ? entity.centrodecosto.descripcion : null,
+                        CentroCostoNombre = entity.centrodecosto != null ? entity.centrodecosto.nombre : null,
                         ProyectoId = entity.proyecto_id,
-                        ProyectoNombre = entity.proyecto != null ? entity.proyecto.descripcion : null,
+                        ProyectoNombre = entity.proyecto != null ? entity.proyecto.nombre : null,
                         JerarquiaId = entity.jerarquia_id,
                         JerarquiaNombre = entity.jerarquia != null ? entity.jerarquia.nombre : null,
                         BonificacionesInvitado = (int)entity.bonificaciones_invitado,
@@ -420,7 +420,7 @@ namespace smartlunch_api.Services
                         Plannutricional_id = entity.plannutricional_id,
                         PlanNutricionalNombre = entity.plannutricional != null ? entity.plannutricional.nombre : null,
                         PlantaId = entity.planta_id ?? 0,
-                        PlantaNombre = entity.planta != null ? entity.planta.descripcion : null,
+                        PlantaNombre = entity.planta != null ? entity.planta.nombre : null,
                         CentroCostoId = entity.centrodecosto_id ?? 0,
                         CentroCostoNombre = entity.centrodecosto != null ? entity.centrodecosto.nombre : null,
                         ProyectoId = entity.proyecto_id ?? 0,
@@ -490,13 +490,13 @@ namespace smartlunch_api.Services
                             PlanNutricionalNombre = u.plannutricional != null ? u.plannutricional.nombre : null,
 
                             PlantaId = u.planta_id,
-                            PlantaNombre = u.planta != null ? u.planta.descripcion : null,
+                            PlantaNombre = u.planta != null ? u.planta.nombre : null,
 
                             CentroCostoId = u.centrodecosto_id,
-                            CentroCostoNombre = u.centrodecosto != null ? u.centrodecosto.descripcion : null,
+                            CentroCostoNombre = u.centrodecosto != null ? u.centrodecosto.nombre : null,
 
                             ProyectoId = u.proyecto_id,
-                            ProyectoNombre = u.proyecto != null ? u.proyecto.descripcion : null,
+                            ProyectoNombre = u.proyecto != null ? u.proyecto.nombre : null,
 
                             JerarquiaId = u.jerarquia_id,
                             JerarquiaNombre = u.jerarquia != null ? u.jerarquia.nombre : null,
@@ -619,17 +619,17 @@ namespace smartlunch_api.Services
 
                             var planta = ctx.sl_planta
                                 .Where(p => p.id == dto.PlantaId.Value && !p.deletemark)
-                                .Select(p => new { p.id, p.descripcion })
+                                .Select(p => new { p.id, p.nombre })
                                 .FirstOrDefault();
 
                             var centroCosto = ctx.sl_centrodecosto
                                 .Where(c => c.id == dto.CentroCostoId.Value && !c.deletemark)
-                                .Select(c => new { c.id, c.descripcion })
+                                .Select(c => new { c.id, c.nombre })
                                 .FirstOrDefault();
 
                             var proyecto = ctx.sl_proyecto
                                 .Where(p => p.id == dto.ProyectoId.Value && !p.deletemark)
-                                .Select(p => new { p.id, p.descripcion })
+                                .Select(p => new { p.id, p.nombre })
                                 .FirstOrDefault();
 
                             var jerarquia = ctx.sl_jerarquia
@@ -816,11 +816,11 @@ namespace smartlunch_api.Services
                                 Plannutricional_id = entity.plannutricional_id,
                                 PlanNutricionalNombre = plan.nombre,
                                 PlantaId = entity.planta_id,
-                                PlantaNombre = planta.descripcion,
+                                PlantaNombre = planta.nombre,
                                 CentroCostoId = entity.centrodecosto_id,
-                                CentroCostoNombre = centroCosto.descripcion,
+                                CentroCostoNombre = centroCosto.nombre,
                                 ProyectoId = entity.proyecto_id,
-                                ProyectoNombre = proyecto.descripcion,
+                                ProyectoNombre = proyecto.nombre,
                                 JerarquiaId = entity.jerarquia_id,
                                 JerarquiaNombre = jerarquia.nombre,
                                 BonificacionesInvitado = (int)entity.bonificaciones_invitado,
@@ -1405,13 +1405,13 @@ namespace smartlunch_api.Services
                             dto.Telefono = usuario.telefono;
 
                         if (request?.IncluirPlanta == true && usuario.planta != null)
-                            dto.Planta = usuario.planta.descripcion;
+                            dto.Planta = usuario.planta.nombre;
 
                         if (request?.IncluirCentroCosto == true && usuario.centrodecosto != null)
-                            dto.CentroCosto = usuario.centrodecosto.descripcion;
+                            dto.CentroCosto = usuario.centrodecosto.nombre;
 
                         if (request?.IncluirProyecto == true && usuario.proyecto != null)
-                            dto.Proyecto = usuario.proyecto.descripcion;
+                            dto.Proyecto = usuario.proyecto.nombre;
 
                         if (request?.IncluirJerarquia == true && usuario.jerarquia != null)
                             dto.Jerarquia = usuario.jerarquia.nombre;
